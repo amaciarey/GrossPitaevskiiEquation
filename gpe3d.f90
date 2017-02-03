@@ -7,12 +7,14 @@ implicit none
 
 !include 'fftw3.f'
 
+character (len=2) :: InitialWF
+
 real (kind=8)    :: xmax,ymax,zmax
 real (kind=8)    :: pi,g,ScatteringLength
 real (kind=8)    :: dx,dy,dz,dt
 real (kind=8)    :: alpha,beta,gamma,W0,WR
 real (kind=8)    :: Norm,NormSq
-real (kind=8)    :: tmp
+real (kind=8)    :: tmp,muTF
 real (kind=8)    :: diff,tol
 real (kind=8)    :: simpson
 real (kind=8)    :: ax1,ax2,ax3
@@ -37,6 +39,7 @@ real (kind=8), dimension (:), allocatable     :: x,y,z
 
 complex (kind=8), dimension (:,:,:), allocatable :: Psi,Psi_prev,Psi_aux
 complex (kind=8), dimension (:), allocatable     :: bx,by,bz
+complex (kind=8), dimension (:), allocatable     :: solx,soly,solz
 
 !open (unit=1,file='3dgpe.in')
 
@@ -49,6 +52,7 @@ read (*,*) ScatteringLength
 read (*,*) Np
 read (*,*) W0,WR
 read (*,*) alpha,beta,gamma
+read (*,*) InitialWF
 
 !close (unit=1)
 
@@ -60,7 +64,10 @@ dy = 2.d0*ymax/real(Ny)
 dz = 2.d0*zmax/real(Nz)
 
 g   = 4.d0*pi*Np*ScatteringLength
+!g   = 62.557
+g   = 500.d0
 iii = (0.d0,1.d0) 
+muTF = 0.5d0*(15.d0*g*alpha*beta*gamma/(4.d0*pi))**0.4d0
 
 allocate (Psi(0:Nx,0:Ny,0:Nz),Psi_prev(0:Nx,0:Ny,0:Nz),Psi_aux(0:Nx,0:Ny,0:Nz))
 allocate (Pot(0:Nx,0:Ny,0:Nz))
@@ -86,8 +93,20 @@ do k=0,Nz
          else if (k==0 .or. k==Nz) then
             Psi(i,j,k) = (0.d0,0.d0)
          else
-            Psi(i,j,k) = (1.d0-WR)*exp(-0.5d0*tmp)+WR*(x(i)+iii*y(j))*exp(-0.5d0*tmp)
-            !Psi(i,j,k) = exp(-0.5d0*tmp)
+            if (InitialWF == 'VS') then
+               Psi(i,j,k) = (1.d0-WR)*exp(-0.5d0*tmp)+WR*(x(i)+iii*y(j))*exp(-0.5d0*tmp)
+            else if (InitialWF == 'HO') then
+               Psi(i,j,k) = cmplx(exp(-0.5d0*tmp),0.d0,8)
+            else if (InitialWF == 'TF') then
+               if (Pot(i,j,k)<muTF) then
+                  Psi(i,j,k) = cmplx(sqrt((muTF-Pot(i,j,k))/g),0.d0,8)
+               else
+                  Psi(i,j,k) = cmplx(0.d0,0.d0,8)
+               end if
+            else
+               print *, "Introduce a valid Initial wave function (VS, HO or TF)"
+               stop
+            end if
          end if
          Psi_prev(i,j,k) = Psi(i,j,k)
 
@@ -268,19 +287,18 @@ allocate (Az(0:Nz),Ayz(0:Ny,0:Nz))
 diff = 1.d0
 it   = 0
 
-!do while (diff/dt >= tol) 
-do it=1,Nit
+do while (diff >= tol) 
 
    call cpu_time(begin)
    diff = 0.d0
 
-   !it = it+1
+   it = it+1
 
    !$OMP PARALLEL&
-   !$OMP& PRIVATE(ithread,nrem,nchunk,ks,ke,js,je,is,ie,tmp,bx,by,bz)&
+   !$OMP& PRIVATE(ithread,nrem,nchunk,ks,ke,js,je,is,ie,tmp,bx,by,bz,solx,soly,solz)&
    !$OMP& REDUCTION(max:diff)
 
-   allocate (bx(1:Nx-1),by(1:Ny-1),bz(1:Nz-1))
+   allocate (bx(1:Nx-1),by(1:Ny-1),bz(1:Nz-1),solx(1:Nx-1),soly(1:Ny-1),solz(1:Nz-1))
 
    nthread = omp_get_num_threads()   
    ithread = omp_get_thread_num()
@@ -318,13 +336,16 @@ do it=1,Nit
    do k=ks,ke
       do j=1,Ny-1
          do i=1,Nx-1
-            bx(i) = -Psi_aux(i,j,k)/dt
+            !bx(i) = -Psi_aux(i,j,k)/dt
+            bx(i) = -Psi(i,j,k)/dt
          end do
          call tridiagonal(Nx-1,Lx(:,-1)+iii*y(j)*L1x(:,-1),&
                          &Lx(:,0)+iii*0.d0,Lx(:,1)+iii*y(j)*L1x(:,1),&
-                         &bx,Psi(1:Nx-1,j,k))
+                         &bx,solx)
+                         !&bx,Psi(1:Nx-1,j,k))
 
-         Psi_aux(1:Nx-1,j,k) = Psi(1:Nx-1,j,k)
+         !Psi_aux(1:Nx-1,j,k) = Psi(1:Nx-1,j,k)
+         Psi(1:Nx-1,j,k) = solx
       end do
    end do
 
@@ -335,12 +356,15 @@ do it=1,Nit
    do k=ks,ke
       do i=1,Nx-1
          do j=1,Ny-1
-            by(j) = -Psi_aux(i,j,k)/dt
+            !by(j) = -Psi_aux(i,j,k)/dt
+            by(j) = -Psi(i,j,k)/dt
          end do
          call tridiagonal(Ny-1,Ly(:,-1)+iii*x(i)*L1y(:,-1),&
                          &Ly(:,0)+iii*0.d0,Ly(:,1)+iii*x(i)*L1y(:,1),&
-                         &by,Psi(i,1:Ny-1,k))
-         Psi_aux(i,1:Ny-1,k) = Psi(i,1:Ny-1,k)
+                         &by,soly)
+                         !&by,Psi(i,1:Ny-1,k))
+         !Psi_aux(i,1:Ny-1,k) = Psi(i,1:Ny-1,k)
+         Psi(i,1:Ny-1,k) = soly
       end do
    end do
    
@@ -362,10 +386,13 @@ do it=1,Nit
    do j=js,je
       do i=1,Nx-1
          do k=1,Nz-1
-            bz(k) = -Psi_aux(i,j,k)/dt
+            !bz(k) = -Psi_aux(i,j,k)/dt
+            bz(k) = -Psi(i,j,k)/dt
          end do
-         call tridiagonal(Nz-1,Lz(:,-1)+iii*0.d0,Lz(:,0)+iii*0.d0,Lz(:,1)+iii*0.d0,bz,Psi(i,j,1:Nz-1))
-         Psi_aux(i,j,1:Nz-1) = Psi(i,j,1:Nz-1)
+         !call tridiagonal(Nz-1,Lz(:,-1)+iii*0.d0,Lz(:,0)+iii*0.d0,Lz(:,1)+iii*0.d0,bz,Psi(i,j,1:Nz-1))
+         call tridiagonal(Nz-1,Lz(:,-1)+iii*0.d0,Lz(:,0)+iii*0.d0,Lz(:,1)+iii*0.d0,bz,solz)
+         !Psi_aux(i,j,1:Nz-1) = Psi(i,j,1:Nz-1)
+         Psi(i,j,1:Nz-1) = solz
       end do
    end do
 
@@ -395,6 +422,56 @@ do it=1,Nit
    NormSq = sqrt(Norm)
    !$OMP END SINGLE
 
+!!$   nrem    = mod(Nz-1,nthread)
+!!$   nchunk  = (Nz-1-nrem)/nthread 
+!!$
+!!$   if (ithread < nrem) then
+!!$      ks = 1+ithread*(nchunk+1)
+!!$      ke = ks+nchunk
+!!$   else
+!!$      ks = 1+ithread*nchunk+nrem
+!!$      ke = ks+nchunk
+!!$   end if
+!!$
+!!$   ! First step of the propagation
+!!$
+!!$   do k=ks,ke
+!!$      do j=1,Ny-1
+!!$         do i=1,Nx-1
+!!$
+!!$            Psi_aux(i,j,k) = Psi_aux(i,j,k)/NormSq
+!!$            tmp            = Pot(i,j,k)+g*abs(Psi_aux(i,j,k))**2
+!!$            Psi(i,j,k)     = exp(-0.5d0*tmp*dt)*Psi_aux(i,j,k)
+!!$            Psi_aux(i,j,k) = Psi(i,j,k) 
+!!$            
+!!$         end do
+!!$      end do
+!!$   end do
+!!$
+!!$   nrem   = mod(Nz,nthread)
+!!$   nchunk = (Nz-nrem)/nthread 
+!!$   
+!!$   if (ithread < nrem) then
+!!$      ks = 1+ithread*(nchunk+1)
+!!$      ke = ks+nchunk
+!!$   else
+!!$      ks = 1+ithread*nchunk+nrem
+!!$      ke = ks+nchunk-1
+!!$   end if
+!!$
+!!$   do k=ks,ke
+!!$      do j=0,Ny
+!!$         Ayz(j,k) = simpson(-xmax,xmax,Nx,abs(Psi(:,j,k))**2)
+!!$      end do
+!!$      Az(k) = simpson(-ymax,ymax,Ny,Ayz(:,k))
+!!$   end do
+!!$   !$OMP BARRIER
+!!$
+!!$   !$OMP SINGLE
+!!$   Norm   = simpson(-zmax,zmax,Nz,Az)
+!!$   NormSq = sqrt(Norm)
+!!$   !$OMP END SINGLE
+
    do k=ks,ke
       do j=0,Ny
          do i=0,Nx
@@ -406,14 +483,20 @@ do it=1,Nit
       end do
    end do
 
-   deallocate (bx,by,bz)
+   deallocate (bx,by,bz,solx,soly,solz)
 
    !$OMP END PARALLEL
 
    call cpu_time(end)
 
-   if (mod(it,1)==0) then
-      print *, "Time elapsed in iteration",it,": ",end-begin,diff
+   if (mod(it,10)==0) then
+      call Chem_and_En(Nx,Ny,Nz,xmax,ymax,zmax,g,WR,Pot,Psi,Chem,En)
+      print *, "Time elapsed in iteration",it,": ",end-begin,diff,En,Chem
+      write (111,*) it,diff,En,Chem
+   end if
+
+   if (it >= Nit) then
+      exit
    end if
 
 end do
@@ -422,7 +505,7 @@ deallocate (Psi_prev,Psi_aux,Lx,Ly,Lz,L1x,L1y,Ayz,Az)
 
 ! Evaluate chemical potential and Energy
 
-call Chem_and_En(Nx,Ny,Nz,xmax,ymax,zmax,g,Pot,Psi,Chem,En)
+call Chem_and_En(Nx,Ny,Nz,xmax,ymax,zmax,g,WR,Pot,Psi,Chem,En)
 
 print *, '=============================================================='
 print *, '                     FINAL RESULTS:                           '
@@ -459,25 +542,30 @@ end program gpe3d
 
 !=======================================================================
 
-subroutine Chem_and_En(Nx,Ny,Nz,xmax,ymax,zmax,g,Pot,Psi,Chem,En)
+subroutine Chem_and_En(Nx,Ny,Nz,xmax,ymax,zmax,g,WR,Pot,Psi,Chem,En)
 
 implicit none
 
-real (kind=8)    :: g
+real (kind=8)    :: g,WR
 real (kind=8)    :: Chem,En
 real (kind=8)    :: dx,dy,dz
 real (kind=8)    :: xmax,ymax,zmax
+real (kind=8)    :: DensK,DensU,DensI,DensL
+complex (kind=8) :: ii
 integer (kind=4) :: Nx,Ny,Nz
 integer (kind=4) :: i,j,k
 
 real (kind=8), dimension (0:Nx,0:Ny,0:Nz)    :: Pot
 complex (kind=8), dimension (0:Nx,0:Ny,0:Nz) :: DPsiX,DPsiY,DPsiZ
 complex (kind=8), dimension (0:Nx,0:Ny,0:Nz) :: Psi
+real (kind=8), dimension (0:Nx,0:Ny,0:Nz) :: DensE
 
 
 dx = 2.d0*xmax/real(Nx)
 dy = 2.d0*ymax/real(Ny)
 dz = 2.d0*zmax/real(Nz)
+
+ii = (0.d0,1.d0)
 
 ! Initialize the boundaries
 
@@ -515,18 +603,25 @@ do k=1,Nz-1
    end do
 end do
 
-call Integrate3D(Nx,Ny,Nz,xmax,ymax,zmax,0.5d0*(abs(DPsiX)**2+&
-                &abs(DPsiY)**2+abs(DPsiZ)**2)+Pot*abs(Psi)**2+&
-                &0.5d0*g*abs(Psi)**4,En)
-call Integrate3D(Nx,Ny,Nz,xmax,ymax,zmax,0.5d0*(abs(DPsiX)**2+&
-                &abs(DPsiY)**2+abs(DPsiZ)**2)+Pot*abs(Psi)**2+&
-                &g*abs(Psi)**4,Chem)
+do k=0,Nz
+   do j=0,Ny
+      do i=0,Nx
+         DensK = 0.5d0*(abs(DPsiX(i,j,k))**2+abs(DPsiY(i,j,k))**2+abs(DPsiZ(i,j,k))**2)
+         DensU = Pot(i,j,k)*abs(Psi(i,j,k))**2
+         DensI = 0.5d0*g*abs(Psi(i,j,k))**4
+         DensL = real(ii*WR*conjg(Psi(i,j,k))*((-xmax+i*dx)*DPsiY(i,j,k)-(-ymax+j*dy)*DPsiX(i,j,k)))
+         DensE(i,j,k) = DensK+DensU+DensI-DensL
+      end do
+   end do
+end do
 
+call Integrate3D(Nx,Ny,Nz,xmax,ymax,zmax,DensE,En)
+call Integrate3D(Nx,Ny,Nz,xmax,ymax,zmax,DensE+0.5d0*g*abs(Psi)**4,Chem)
 
 return
 end subroutine Chem_and_En
 
-!-----------------------------------------------------------------------
+!------------------------------------------------------------------------
 
 subroutine Integrate3D(Nx,Ny,Nz,xmax,ymax,zmax,Psi,Atot)
 

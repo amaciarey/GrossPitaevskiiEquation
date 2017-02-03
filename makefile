@@ -1,6 +1,6 @@
 #f90=gfortran -Wall
-#f90=gfortran -O2 -Wall -fopenmp -fcheck=bounds #-heap-arrays #-qopenmp
-f90=ifort -qopenmp -heap-arrays -mmic
+f90=gfortran -O2 -Wall -fopenmp -fcheck=all#-heap-arrays #-qopenmp
+#f90=ifort -qopenmp -heap-arrays -mmic
 FFT_LIB=/home/amacia/local/FFTW/3.3.5/lib
 FFT_INC=/home/amacia/local/FFTW/3.3.5/include
 
