@@ -1,0 +1,8 @@
+10.0 10.0 15.0  # Limits of the integration region (x, y, z)
+2.0d-2 5000    # Time step and number of iterations
+128 128 128     # Grid points in each direction (x, y, z)
+1.d-1           # Scattering length
+398             # Number of particles
+1.0 0.75        # Frequency of the trapping potential and angular velocity of rotation
+1.0 1.0 0.5     # Anisotropy of the trapping potential (x, y, z)
+TF              # Initial WF (TF=Thomas-Fermi, HO=Harmonic oscillator, VS=Vortex solution)
